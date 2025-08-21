@@ -339,9 +339,6 @@ def main():
             for symbol in simbolos:
                 # 👇 Saltar monedas que ya están protegidas
                 if symbol in monedas_protegidas:
-                    msj=("La moneda {symbol} ya fue operada, no se abrirá otra posición")
-                    enviar_mensaje_telegram(chat_id=chat_id, mensaje=msj)
-                    print(msj)
                     continue
 
                 precio_actual = obtener_precio_actual(symbol)
