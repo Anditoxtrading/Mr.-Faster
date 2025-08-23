@@ -219,10 +219,11 @@ def monitorear_posiciones():
 
                 # Cancelar stop anterior si existe
                 try:
-                    orders = session.get_open_orders(symbol=symbol, category="linear")
-                    for order in orders["result"]["list"]:
-                        if order["type"] == "STOP_MARKET":
-                            session.cancel_order(symbol=symbol, orderId=order["orderId"], category="linear")
+                    (session.cancel_all_orders(
+                        symbol=symbol,
+                        category="linear",
+                        settleCoin="USDT",
+                    ))
                 except Exception as e:
                     print(f"Error al cancelar stop anterior para {symbol}: {e}")
 
@@ -313,22 +314,6 @@ def obtener_simbolos_volumen_minimo(volumen_minimo=100_000_000, precio_maximo=20
 
     return simbolos_filtrados
 
-
-def obtener_precio_actual(symbol):
-    response = session.get_tickers(category="linear", symbol=symbol)
-    if response["retCode"] != 0 or not response["result"]["list"]:
-        print(f"Error al obtener precio actual para {symbol}: {response['retMsg']}")
-        return None
-
-    return float(response["result"]["list"][0]["lastPrice"])
-def calcular_porcentaje_subida(precio_antiguo, precio_actual):
-
-    if precio_antiguo == 0:
-        return 0
-    return ((precio_actual - precio_antiguo) / precio_antiguo) * 100
-
-precios_historicos = {}
-
 def main():
     print("Bot iniciado. Monitoreando movimientos en futuros lineales con volumen > 100M USDT y precio <= 20 USDT...")
 
@@ -339,38 +324,51 @@ def main():
             for symbol in simbolos:
                 # 👇 Saltar monedas que ya están protegidas
                 if symbol in monedas_protegidas:
+                    msj = (f"La moneda {symbol} ya fue operada, no se abrirá otra posición")
+                    enviar_mensaje_telegram(chat_id=chat_id, mensaje=msj)
+                    print(msj)
                     continue
-
-                precio_actual = obtener_precio_actual(symbol)
-                if precio_actual is None:
+                # === 1. Obtener penúltima vela ===
+                klines = session.get_kline(
+                    category="linear",
+                    symbol=symbol,
+                    interval=1,   # 1m (puedes cambiar el timeframe)
+                    limit=2
+                )
+                if "result" not in klines or "list" not in klines["result"]:
                     continue
+                penultima = klines["result"]["list"][1]
+                precio_apertura = float(penultima[1])  # openPrice
 
-                if symbol in precios_historicos:
-                    precio_anterior = precios_historicos[symbol]
-                    pct_subida = calcular_porcentaje_subida(precio_anterior, precio_actual)
-
-                    if pct_subida >= 2:
-                        mensaje = (
-                            f"🚨 ALERTA: {symbol} subió {pct_subida:.2f}% | "
-                            f"Precio anterior: {precio_anterior} | Precio actual: {precio_actual}"
-                        )
-                        print(mensaje)
-
-                        base_asset_qty_final = qty_step(symbol, amount_usdt)
-                        if base_asset_qty_final is None:
-                            print(f"No se pudo calcular la cantidad para {symbol}.")
-                            continue
-
-                        abrir_posicion_corto(symbol, base_asset_qty_final, distancia_porcentaje_sl)
-
-                # Guardar/actualizar precio actual para la próxima vuelta
-                precios_historicos[symbol] = precio_actual
-
-            time.sleep(60)
-
+                # === 2. Obtener precio actual ===
+                ticker = session.get_tickers(
+                    category="linear",
+                    symbol=symbol
+                )
+                precio_actual = float(ticker["result"]["list"][0]["lastPrice"])
+                # === 3. Calcular distancia porcentual ===
+                pct_distancia = ((precio_actual - precio_apertura) / precio_apertura) * 100
+                # === 4. Validar si supera 2% ===
+                if pct_distancia >= 2:
+                    mensaje = (
+                        f"🚨 ALERTA: {symbol} se movió {pct_distancia:.2f}% | "
+                        f"Apertura penúltima vela: {precio_apertura} | Precio actual: {precio_actual}"
+                    )
+                    print(mensaje)
+                    enviar_mensaje_telegram(chat_id=chat_id, mensaje=mensaje)
+                    # Calcular cantidad a operar
+                    base_asset_qty_final = qty_step(symbol, amount_usdt)
+                    if base_asset_qty_final is None:
+                        print(f"No se pudo calcular la cantidad para {symbol}.")
+                        continue
+                    # Abrir operación en corto
+                    abrir_posicion_corto(symbol, base_asset_qty_final, distancia_porcentaje_sl)
+                    # Añadir símbolo a la lista de protegidos
+                    monedas_protegidas.add(symbol)
+            time.sleep(30)
         except Exception as e:
             print("⚠️ Error inesperado:", e)
-            time.sleep(60)
+            time.sleep(30)
 
 if __name__ == "__main__":
 
